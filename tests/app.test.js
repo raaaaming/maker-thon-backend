@@ -272,3 +272,69 @@ test('heartbeat stores diagnostics and the app stays online between beats', asyn
   clock.advance(30_000);
   assert.equal((await call('GET', '/api/devices/toilet-01/context', { token: '1' })).data.state, 'offline');
 });
+
+// ---- personal AI analysis: POST /api/insights/analyze ----
+const seedBowel = (store, clock, uid, days) => {
+  for (let d = 0; d < days; d++) {
+    const end = clock.now() - d * 86_400_000 - 3_600_000;
+    store.tables.toilet_sessions.push({ id: `p${uid}-${d}`, device_id: 'toilet-01', user_id: uid, started_at: new Date(end - 300_000).toISOString(),
+      ended_at: new Date(end).toISOString(), sitting_sec: 300, time_source: 'sensor', clock_status: 'synced', stool_color: d === 0 ? 'black' : 'brown',
+      color_status: 'classified', shape: 3 + (d % 2), shape_status: 'selected', excretion_type: 'stool', claimed_at: new Date(end).toISOString() });
+  }
+};
+const U1 = '00000000-0000-4000-8000-000000000001';
+
+test('insights/analyze: auth, thin data and missing AI config fall back to a rules summary', async () => {
+  const { call, store, clock } = setup();
+  assert.equal((await call('POST', '/api/insights/analyze', { body: {} })).status, 401);
+  seedBowel(store, clock, U1, 2);
+  const thin = (await call('POST', '/api/insights/analyze', { token: '1', body: {} })).data;
+  assert.equal(thin.source, 'rules'); assert.equal(thin.status, 'insufficient_data');
+  assert.deepEqual(thin.observations, []);
+  seedBowel(store, clock, U1, 5);
+  const noAi = (await call('POST', '/api/insights/analyze', { token: '1', body: {} })).data;
+  assert.equal(noAi.source, 'rules'); assert.equal(noAi.status, 'unavailable');
+  const ids = new Set(noAi.evidence.map(e => e.id));
+  assert.ok(noAi.observations.length && noAi.observations.every(o => o.evidence_ids.every(id => ids.has(id))));
+  assert.ok(noAi.evidence.some(e => e.id === 'color-alert'));
+  // other accounts see nothing of this user's records
+  assert.equal((await call('POST', '/api/insights/analyze', { token: '2', body: {} })).data.status, 'insufficient_data');
+});
+
+test('insights/analyze: AI output is accepted only with valid evidence ids, and no private data is sent', async () => {
+  let sent = null;
+  const modelText = ids => ({ summary: '최근 기록을 정리했어요.',
+    observations: [{ title: '횟수', description: '기록된 횟수예요.', evidence_ids: [ids[0]] }],
+    next_steps: [{ title: '기록 이어가기', description: '계속 기록해 보세요.', evidence_ids: [ids[0]] }] });
+  let reply = ids => modelText(ids);
+  const fetchImpl = async (url, init) => {
+    sent = JSON.parse(init.body);
+    const ids = JSON.parse(sent.messages[0].content).evidence.map(e => e.id);
+    return { ok: true, json: async () => ({ content: [{ type: 'tool_use', name: 'write_analysis', input: reply(ids) }] }) };
+  };
+  const { call, store, clock } = setup({ anthropicKey: 'k', anthropicModel: 'm', fetchImpl });
+  seedBowel(store, clock, U1, 5);
+  store.tables.meals.push({ id: 'm1', user_id: U1, foods: [{ name: '김치찌개 우리집 비밀레시피', tags: ['식이섬유', '내 이메일 a@b.c'] }],
+    eaten_at: new Date(clock.now() - 3_600_000).toISOString(), photo: 'data:image/png;base64,AAAA', source: 'manual', created_at: new Date(clock.now()).toISOString() });
+
+  const ok = (await call('POST', '/api/insights/analyze', { token: '1', body: {} })).data;
+  assert.equal(ok.source, 'ai'); assert.equal(ok.status, 'complete');
+  const payload = JSON.stringify(sent);
+  for (const secret of ['u1@example.com', 'p' + U1, '김치찌개', '비밀레시피', 'a@b.c', 'data:image', U1]) assert.ok(!payload.includes(secret), `leaked ${secret}`);
+  assert.ok(payload.includes('식이섬유 태그 식사'));
+
+  reply = () => ({ ...modelText(['x']), observations: [{ title: 't', description: 'd', evidence_ids: ['not-real'] }] });
+  const bad = (await call('POST', '/api/insights/analyze', { token: '1', body: {} })).data;
+  assert.equal(bad.source, 'rules'); assert.equal(bad.status, 'unavailable');
+
+  const failing = setup({ anthropicKey: 'k', anthropicModel: 'm', fetchImpl: async () => ({ ok: false }) });
+  seedBowel(failing.store, failing.clock, U1, 5);
+  assert.equal((await failing.call('POST', '/api/insights/analyze', { token: '1', body: {} })).data.status, 'unavailable');
+});
+
+test('insights/analyze: rate limited per user', async () => {
+  const { call } = setup();
+  let last;
+  for (let i = 0; i < 6; i++) last = await call('POST', '/api/insights/analyze', { token: '1', body: {} });
+  assert.equal(last.status, 429);
+});

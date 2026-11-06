@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { randomUUID } from 'node:crypto';
 import { safeEqual } from './auth.js';
 import { analyzeFoodPhoto } from './analyze.js';
+import { personalAnalysis } from './personal.js';
 import { boardSessionToEvent } from './board.js';
 import {
   HttpError, fail, check, text, dateField, shapeInput, foodInput, imageInput, deviceEventInput,
@@ -120,7 +121,7 @@ export function createApp({ config, store, verifyToken }) {
     c.set('user', user);
     await next();
   };
-  const authed = ['/api/me', '/api/account', '/api/devices/*', '/api/sessions/*', '/api/records', '/api/records/*', '/api/meals', '/api/meals/*', '/api/insights'];
+  const authed = ['/api/me', '/api/account', '/api/devices/*', '/api/sessions/*', '/api/records', '/api/records/*', '/api/meals', '/api/meals/*', '/api/insights', '/api/insights/*'];
   for (const p of authed) app.use(p, requireUser);
 
   const memberOf = async (deviceId, userId) => {
@@ -298,6 +299,17 @@ export function createApp({ config, store, verifyToken }) {
         { title: '음식 태그와 변 모양', description: `식이섬유 태그 식사를 ${fiberMeals}회 기록했어요. 변 모양과의 관련성이나 원인은 단정할 수 없어요.`, basis: `최근 7일 식사 ${meals.length}회 중 식이섬유 태그 ${fiberMeals}회` }];
     return c.json({ days, record_count: bowel.length, meal_count: meals.length, average_sitting_sec: average,
       average_sample_count: secs.length, items: items.slice(0, 3), alerts, chart, source: 'rules' });
+  });
+
+  // Personal AI analysis of the last 7 days (+ the 21 days before). Falls back to a rules summary.
+  app.post('/api/insights/analyze', async c => {
+    const uid = c.get('user').id, t = now();
+    limit(`insight:${uid}`, 5, 60_000);
+    const from = Date.parse(`${kstDate(t)}T00:00:00+09:00`) - 27 * DAY;
+    const records = await store.select('toilet_sessions', { order: ['ended_at', 'asc'],
+      where: [['user_id', 'eq', uid], ['ended_at', 'gte', iso(from)], ['ended_at', 'lte', iso(t)]] });
+    const meals = await store.select('meals', { where: [['user_id', 'eq', uid], ['eaten_at', 'gte', iso(from)], ['eaten_at', 'lte', iso(t)]] });
+    return c.json(await personalAnalysis(config, records, meals, t));
   });
 
   return app;

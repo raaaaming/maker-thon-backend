@@ -40,6 +40,7 @@
 | PATCH/DELETE | `/api/meals/:id` | 식사 수정/삭제 |
 | POST | `/api/meals/analyze` | `{image: "data:image/jpeg;base64,..."}` 음식 사진 AI 분석 |
 | GET | `/api/insights` | 최근 7일 요약 |
+| POST | `/api/insights/analyze` | 개인 배변·식사 AI 분석(최근 7일 + 이전 21일). 3일 미만 기록이면 `insufficient_data`, AI 설정 없음·오류면 근거 기반 `rules` 요약. 이름·이메일·사진·기록 ID·음식명은 AI에 보내지 않고, 모델이 인용한 근거 ID를 서버에서 검증. 분당 5회 제한 |
 
 ### 보드 (Bearer `DEVICE_TOKEN`)
 | 메서드 | 경로 | 설명 |
