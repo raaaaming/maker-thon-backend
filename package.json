@@ -1,0 +1,17 @@
+{
+  "name": "maker-ton-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/local.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "@supabase/supabase-js": "^2.119.0",
+    "hono": "^4.13.16",
+    "jose": "^6.2.15"
+  }
+}
