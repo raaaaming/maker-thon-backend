@@ -107,7 +107,7 @@ export function createApp({ config, store, verifyToken }) {
   // Board upload (device/main.py): envelope with the full analysis packet.
   app.post('/api/session', async c => {
     const body = await deviceAuth(c);
-    const { event, analysis } = boardSessionToEvent(body, { deviceId: config.deviceId, now: now(), claimWindowMs: config.claimWindowMs });
+    const { event, analysis } = boardSessionToEvent(body, { deviceId: config.deviceId, now: now(), claimWindowMs: config.claimWindowMs, colorGate: config.colorGate });
     return c.json(await ingest(deviceEventInput(event, config.deviceId), { analysis }));
   });
 

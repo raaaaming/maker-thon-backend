@@ -223,6 +223,16 @@ test('board /api/session: quality, timed mode, stale clock and bad envelopes', a
   assert.equal(store.tables.toilet_sessions.find(r => r.id === 'poor1').color_status, 'uncertain');
   assert.equal(store.tables.toilet_sessions.find(r => r.id === 'poor1').stool_color, null);
 
+  // weak LED signal / unstable ambient light: lenient (default) keeps the estimate, strict drops it
+  const weak = id(boardEnvelope(clock, {}, { flags: ['low_led_signal', 'ambient_light_unstable'] }), 'weak1');
+  assert.equal((await post(weak)).status, 200);
+  assert.equal(store.tables.toilet_sessions.find(r => r.id === 'weak1').color_status, 'classified');
+  assert.equal(store.tables.toilet_sessions.find(r => r.id === 'weak1').stool_color, 'brown');
+  const strict = setup({ colorGate: 'strict' });
+  await strict.call('POST', '/api/session', { device: DEVICE_TOKEN, body: id(boardEnvelope(strict.clock, {}, { flags: ['low_led_signal'] }), 'weak2') });
+  assert.equal(strict.store.tables.toilet_sessions.find(r => r.id === 'weak2').color_status, 'uncertain');
+  assert.equal(strict.store.tables.toilet_sessions.find(r => r.id === 'weak2').stool_color, null);
+
   // no white reference -> unmeasured
   const e2 = id(boardEnvelope(clock, {}, { flags: ['no_white_reference'] }), 'nowhite');
   e2.packet.optical_sensor_data.features.after = { estimated_color: null };

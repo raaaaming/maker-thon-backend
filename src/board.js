@@ -26,10 +26,11 @@ export function stoolColorFromName(name) {
 }
 
 const POOR_QUALITY = ['spectrum_saturated', 'ambient_light_unstable', 'low_led_signal'];
+const HARD_QUALITY = ['spectrum_saturated'];
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
 
-export function boardSessionToEvent(body, { deviceId, now, claimWindowMs }) {
+export function boardSessionToEvent(body, { deviceId, now, claimWindowMs, colorGate = 'lenient' }) {
   check(body.schema_version === 1, '지원하지 않는 전송 형식이에요.');
   check(body.device_id === deviceId, '등록된 기기 ID를 사용해 주세요.');
   check(typeof body.session_id === 'string' && ID.test(body.session_id), '세션 ID를 확인해 주세요.');
@@ -52,7 +53,7 @@ export function boardSessionToEvent(body, { deviceId, now, claimWindowMs }) {
   const flags = Array.isArray(opt.flags) ? opt.flags.filter(f => typeof f === 'string') : [];
   const after = isObj(opt.features) && isObj(opt.features.after) ? opt.features.after : null;
   const mapped = stoolColorFromName(after?.estimated_color?.name);
-  const poor = flags.some(f => POOR_QUALITY.includes(f));
+  const poor = flags.some(f => (colorGate === 'strict' ? POOR_QUALITY : HARD_QUALITY).includes(f));
   let color_status, stool_color = null;
   if (flags.includes('R1_missing')) color_status = 'failed';
   else if (!after?.estimated_color) color_status = 'unmeasured'; // e.g. no white reference
