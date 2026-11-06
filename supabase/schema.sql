@@ -63,6 +63,14 @@ create table if not exists public.deleted_sessions (
   device_id text not null
 );
 
+-- Last time a user tapped the NFC tag at a device (one row per device+user).
+create table if not exists public.checkins (
+  device_id text not null references public.devices(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  checked_at timestamptz not null default now(),
+  primary key (device_id, user_id)
+);
+
 insert into public.devices (id, name) values ('toilet-01', '우리 변기') on conflict do nothing;
 
 -- Auto-create a profile when someone signs up.
@@ -85,9 +93,10 @@ alter table public.device_members  enable row level security;
 alter table public.toilet_sessions enable row level security;
 alter table public.meals           enable row level security;
 alter table public.deleted_sessions enable row level security;
+alter table public.checkins        enable row level security;
 
 revoke all on public.profiles, public.devices, public.device_members,
-  public.toilet_sessions, public.meals, public.deleted_sessions from anon, authenticated;
+  public.toilet_sessions, public.meals, public.deleted_sessions, public.checkins from anon, authenticated;
 grant select on public.profiles, public.devices, public.device_members,
   public.toilet_sessions, public.meals to authenticated;
 

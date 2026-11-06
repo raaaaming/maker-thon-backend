@@ -31,6 +31,7 @@
 | PATCH | `/api/me` | `{name}` 이름 변경 |
 | DELETE | `/api/account` | 계정과 모든 기록 삭제 |
 | POST | `/api/devices/join` | `{device_id, code}` 연결 코드로 변기 연결 |
+| POST | `/api/devices/:id/checkins` | NFC 태그를 찍어 앱을 열 때 호출 (연결된 변기만) |
 | GET | `/api/devices/:id/context` | 기기 상태(`offline/idle/measuring`)와 저장 가능한 측정 후보 |
 | POST | `/api/sessions/:id/claim` | `{shape, shape_status, excretion_type}` 측정을 내 기록으로 저장 (종료 후 10분 이내) |
 | GET | `/api/records` | 내 배변 기록 |

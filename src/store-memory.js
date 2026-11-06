@@ -4,11 +4,11 @@ const cmp = {
   gt: (a, b) => a > b, gte: (a, b) => a >= b, lt: (a, b) => a < b, lte: (a, b) => a <= b,
   is: (a, b) => (b === null ? a == null : a === b),
 };
-const keys = { devices: ['id'], device_members: ['device_id', 'user_id'], profiles: ['id'], toilet_sessions: ['id'], meals: ['id'], deleted_sessions: ['id'] };
+const keys = { devices: ['id'], device_members: ['device_id', 'user_id'], profiles: ['id'], toilet_sessions: ['id'], meals: ['id'], deleted_sessions: ['id'], checkins: ['device_id', 'user_id'] };
 const match = (row, where) => where.every(([c, op, v]) => cmp[op](row[c], v));
 
 export function createMemoryStore() {
-  const tables = { devices: [], device_members: [], profiles: [], toilet_sessions: [], meals: [], deleted_sessions: [] };
+  const tables = { devices: [], device_members: [], profiles: [], toilet_sessions: [], meals: [], deleted_sessions: [], checkins: [] };
   const clone = r => structuredClone(r);
   const same = (table, a, b) => keys[table].every(k => a[k] === b[k]);
   return {
@@ -49,6 +49,7 @@ export function createMemoryStore() {
       tables.device_members = tables.device_members.filter(r => r.user_id !== id);
       tables.toilet_sessions = tables.toilet_sessions.filter(r => r.user_id !== id);
       tables.meals = tables.meals.filter(r => r.user_id !== id);
+      tables.checkins = tables.checkins.filter(r => r.user_id !== id);
     },
     async ping() {},
   };

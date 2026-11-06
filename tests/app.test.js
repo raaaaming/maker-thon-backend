@@ -69,6 +69,11 @@ test('full flow: pair, board event, claim, edit, delete, no resurrection', async
 
   const ctx = (await call('GET', '/api/devices/toilet-01/context', { token: '1' })).data;
   assert.equal(ctx.state, 'idle'); assert.equal(ctx.candidates.length, 1);
+  assert.equal((await call('POST', '/api/devices/toilet-01/checkins', { token: '1' })).status, 200);
+  assert.equal((await call('POST', '/api/devices/toilet-01/checkins', { token: '1' })).status, 200); // upsert
+  assert.equal((await call('POST', '/api/devices/toilet-01/checkins', { token: '2' })).status, 403);
+  assert.equal((await call('POST', '/api/devices/toilet-01/checkins')).status, 401);
+  assert.equal(store.tables.checkins.length, 1);
   // a user who is not paired cannot see the device
   assert.equal((await call('GET', '/api/devices/toilet-01/context', { token: '2' })).status, 403);
 

@@ -152,6 +152,13 @@ export function createApp({ config, store, verifyToken }) {
     return c.json({ devices: await devicesOf(user.id) });
   });
 
+  // NFC tag tap: the app opens /checkin?device=<id> and reports "this user is at this toilet now".
+  app.post('/api/devices/:id/checkins', async c => {
+    const user = c.get('user'), device = await memberOf(c.req.param('id'), user.id);
+    await store.upsert('checkins', { device_id: device.id, user_id: user.id, checked_at: iso(now()) }, 'device_id,user_id');
+    return c.json({ ok: true });
+  });
+
   app.get('/api/devices/:id/context', async c => {
     const user = c.get('user'), device = await memberOf(c.req.param('id'), user.id), t = now();
     const base = [['device_id', 'eq', device.id], ['user_id', 'is', null], ['measurement_status', 'eq', 'completed'], ['clock_status', 'eq', 'synced']];
