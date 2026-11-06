@@ -23,8 +23,8 @@ export function createSupabaseStore(config) {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
   return {
-    async select(table, { where = [], order, limit } = {}) {
-      let q = applyWhere(client.from(table).select('*'), where);
+    async select(table, { where = [], order, limit, columns = '*' } = {}) {
+      let q = applyWhere(client.from(table).select(columns), where);
       if (order) q = q.order(order[0], { ascending: order[1] !== 'desc' });
       if (limit) q = q.limit(limit);
       return unwrap(await q);

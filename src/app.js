@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { randomUUID } from 'node:crypto';
 import { safeEqual } from './auth.js';
 import { analyzeFoodPhoto } from './analyze.js';
+import { createPersonalInsights } from './personal-insights.js';
 import { boardSessionToEvent } from './board.js';
 import {
   HttpError, fail, check, text, dateField, shapeInput, foodInput, imageInput, deviceEventInput,
@@ -23,6 +24,7 @@ export function createApp({ config, store, verifyToken }) {
   const app = new Hono();
   const now = () => Number(config.now());
   const iso = ms => new Date(ms).toISOString();
+  const personalInsights = createPersonalInsights({ config, store });
 
   // Best-effort per-instance limiter (serverless instances do not share memory).
   const limits = new Map();
@@ -120,7 +122,7 @@ export function createApp({ config, store, verifyToken }) {
     c.set('user', user);
     await next();
   };
-  const authed = ['/api/me', '/api/account', '/api/devices/*', '/api/sessions/*', '/api/records', '/api/records/*', '/api/meals', '/api/meals/*', '/api/insights'];
+  const authed = ['/api/me', '/api/account', '/api/devices/*', '/api/sessions/*', '/api/records', '/api/records/*', '/api/meals', '/api/meals/*', '/api/insights', '/api/insights/*'];
   for (const p of authed) app.use(p, requireUser);
 
   const memberOf = async (deviceId, userId) => {
@@ -274,6 +276,13 @@ export function createApp({ config, store, verifyToken }) {
     const m = await ownMeal(c, c.req.param('id'));
     await store.remove('meals', [['id', 'eq', m.id], ['user_id', 'eq', m.user_id]]);
     return c.json({ ok: true });
+  });
+
+  // An explicit user action analyzes only records belonging to the verified JWT subject.
+  app.post('/api/insights/analyze', async c => {
+    const body = await readBody(c);
+    check(Object.keys(body).length === 0, '분석 대상은 로그인한 내 기록으로 자동 선택돼요.');
+    return c.json(await personalInsights(c.get('user').id));
   });
 
   // ---- insights (rule based, no diagnosis) ----
