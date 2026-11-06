@@ -85,3 +85,34 @@
 - `SUPABASE_SECRET_KEY`는 서버 환경변수에만 두고 브라우저·앱·보드에 넣지 마세요.
 - 이 서비스는 건강 관련 기록을 다룹니다. 색 안내는 진단이 아니라는 문구를 유지하세요.
 - 요청 제한은 서버 인스턴스별 best-effort입니다. 트래픽이 커지면 Vercel Firewall 등을 추가하세요.
+
+## 개인 맞춤형 배변 AI 분석
+
+`POST /api/insights/analyze`에 Supabase `Authorization: Bearer <access_token>`과 빈 JSON `{}`를 보냅니다. 로그인한 사용자의 기록만 서버에서 조회하며, 요청 본문의 사용자 ID나 기록 목록은 받지 않습니다. 기존 `GET /api/insights`는 무료 규칙 기반 요약 그대로입니다.
+
+- 최근 7일과 그 이전 21일을 한국 날짜 기준으로 집계합니다. 대변·둘 다인 완료 기록, 직접 선택한 모양, 유효한 센서 사용 시간만 각각의 집계에 포함합니다. 미측정 시간은 0초로 바꾸지 않습니다.
+- 최근 서로 다른 3일에 배변 3회 이상 기록한 뒤 AI 분석이 가능합니다. 이 기준은 기능의 최소 표본 기준이며 의학적 기준이 아닙니다.
+- `ANTHROPIC_API_KEY`와 `ANTHROPIC_MODEL`은 이 **백엔드** Vercel 환경변수에 설정합니다. 기존 음식 사진 AI와 같은 설정을 사용하며 프론트에는 키를 넣지 않습니다.
+- 사용자가 분석을 요청할 때만 Anthropic에 기간별·날짜별 집계를 보냅니다. 이름, 이메일, 사용자/기기/기록 ID, 사진, 음식 이름과 임의의 태그, 원본 분광·가스 측정값은 보내지 않습니다. 음식 태그는 정해진 카테고리별 횟수로만 전달합니다.
+- 출력은 요약, 관찰 최대 3개, 다음 기록 행동 최대 2개와 해당 근거 ID로 구성합니다. 임상 진단, 건강 점수, 음식과 배변의 인과관계를 제공하지 않습니다. 입력과 AI 응답을 로그에 남기거나 DB에 저장하지 않습니다.
+
+응답 형식:
+
+```text
+{
+  source: "ai" | "rules",
+  status: "complete" | "insufficient_data" | "unavailable",
+  generated_at, period: { start, end },
+  coverage: { bowel_records, bowel_days, meal_records, shape_records, sensor_records },
+  summary,
+  observations: [{ title, description, evidence_ids }],
+  next_steps: [{ title, description, evidence_ids }],
+  evidence: [{ id, label, value }], limitations: string[]
+}
+```
+
+`source: "ai"`는 모델 호출 및 구조·근거 검증을 통과한 결과에만 붙습니다. 표본 부족은 `insufficient_data`, 설정 누락·모델 오류·18초 초과·잘못된 출력은 `unavailable` 상태의 규칙 요약으로 반환합니다. 범위 안에 배변 또는 식사 기록이 500건을 넘으면 전체 집계를 보장하지 못하므로 일부 기록임을 표시하고 AI 호출을 하지 않습니다. 인증 실패는 기존 `401 AUTH_REQUIRED`, 과도한 호출은 `429 RATE_LIMITED`입니다.
+
+같은 사용자·같은 집계의 성공 결과만 인스턴스 메모리에 최대 10분 캐시합니다(최대 256명). 집계나 한국 날짜가 바뀌면 다시 분석하고, 동시에 들어온 같은 분석은 하나의 모델 호출을 공유합니다. 실패 결과는 재시도할 수 있으며 모델 호출 시도는 사용자당 분당 3회까지입니다. 이 캐시와 제한은 서버리스 인스턴스별 best-effort이며 영구 저장이나 전체 시스템 비용 상한이 아닙니다.
+
+검증: `npm test` — 기존 API 테스트와 `tests/personal-insights.test.js`의 인증·사용자 격리·집계·모델 응답/실패·캐시·동시 요청 테스트를 함께 실행합니다. 모델 응답 테스트는 가짜 공급자를 쓰므로 배포 환경의 실제 API 키·모델 동작 확인은 별도로 필요합니다.
