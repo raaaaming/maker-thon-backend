@@ -10,6 +10,8 @@ export function createConfig(env = process.env, overrides = {}) {
     anthropicKey: env.ANTHROPIC_API_KEY || '',
     anthropicModel: env.ANTHROPIC_MODEL || '',
     claimWindowMs: Number(env.CLAIM_WINDOW_MIN || 10) * 60_000,
+    // Board heartbeats every ~25s; tolerate two missed beats before showing "offline".
+    offlineAfterMs: Number(env.OFFLINE_AFTER_SEC || 75) * 1000,
     now: Date.now,
     fetchImpl: globalThis.fetch,
     ...overrides,

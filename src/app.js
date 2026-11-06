@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { randomUUID } from 'node:crypto';
 import { safeEqual } from './auth.js';
 import { analyzeFoodPhoto } from './analyze.js';
+import { boardSessionToEvent } from './board.js';
 import {
   HttpError, fail, check, text, dateField, shapeInput, foodInput, imageInput, deviceEventInput,
   DAY, ID, UUID, ALERT_STOOL,
@@ -68,29 +69,46 @@ export function createApp({ config, store, verifyToken }) {
     return readBody(c);
   };
 
+  // Heartbeat: only a few whitelisted, size-bounded diagnostics are kept.
+  const heartbeatStatus = b => {
+    const s = v => (typeof v === 'string' ? v.slice(0, 200) : null);
+    const n = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const sensors = b.sensors && typeof b.sensors === 'object' && !Array.isArray(b.sensors)
+      ? Object.fromEntries(Object.entries(b.sensors).slice(0, 8).map(([k, v]) => [k.slice(0, 20), Boolean(v)])) : null;
+    return { state: s(b.state), mode: s(b.mode), sensors, in_session: Boolean(b.in_session), warm: Boolean(b.warm),
+      outbox_pending: n(b.outbox_pending), uptime_s: n(b.uptime_s), last_upload_error: s(b.last_upload_error) };
+  };
   app.post('/api/device/heartbeat', async c => {
     const body = await deviceAuth(c);
     check(body.device_id === config.deviceId, '등록된 기기 ID를 사용해 주세요.');
-    await store.update('devices', [['id', 'eq', config.deviceId]], { last_seen_at: iso(now()) });
+    await store.update('devices', [['id', 'eq', config.deviceId]], { last_seen_at: iso(now()), status: heartbeatStatus(body) });
     return c.json({ ok: true });
   });
 
-  app.post('/api/device/events', async c => {
-    const body = await deviceAuth(c);
-    const row = deviceEventInput(body, config.deviceId);
-    if ((await store.select('deleted_sessions', { where: [['id', 'eq', row.id]] })).length) return c.json({ ok: true, deleted: true });
+  async function ingest(row, extra = {}) {
+    if ((await store.select('deleted_sessions', { where: [['id', 'eq', row.id]] })).length) return { ok: true, deleted: true };
     await store.update('devices', [['id', 'eq', row.device_id]], { last_seen_at: iso(now()) });
     const [old] = await store.select('toilet_sessions', { where: [['id', 'eq', row.id]] });
     // A final sample is immutable, including after ownership is assigned.
-    if (old && (old.measurement_status !== 'measuring' || row.measurement_status === 'measuring')) return c.json({ ok: true, duplicate: true });
+    if (old && (old.measurement_status !== 'measuring' || row.measurement_status === 'measuring')) return { ok: true, duplicate: true };
     const received_at = iso(now());
     if (old) {
-      await store.update('toilet_sessions', [['id', 'eq', row.id], ['measurement_status', 'eq', 'measuring'], ['user_id', 'is', null]], { ...row, received_at });
+      await store.update('toilet_sessions', [['id', 'eq', row.id], ['measurement_status', 'eq', 'measuring'], ['user_id', 'is', null]], { ...row, ...extra, received_at });
     } else {
-      try { await store.insert('toilet_sessions', { ...row, user_id: null, received_at }); }
-      catch (e) { if (e.code === '23505') return c.json({ ok: true, duplicate: true }); throw e; }
+      try { await store.insert('toilet_sessions', { ...row, ...extra, user_id: null, received_at }); }
+      catch (e) { if (e.code === '23505') return { ok: true, duplicate: true }; throw e; }
     }
-    return c.json({ ok: true });
+    return { ok: true };
+  }
+
+  // Generic event (start/finish) in the normalized shape.
+  app.post('/api/device/events', async c => c.json(await ingest(deviceEventInput(await deviceAuth(c), config.deviceId))));
+
+  // Board upload (device/main.py): envelope with the full analysis packet.
+  app.post('/api/session', async c => {
+    const body = await deviceAuth(c);
+    const { event, analysis } = boardSessionToEvent(body, { deviceId: config.deviceId, now: now(), claimWindowMs: config.claimWindowMs });
+    return c.json(await ingest(deviceEventInput(event, config.deviceId), { analysis }));
   });
 
   // ---- user (Supabase Auth JWT) ----
@@ -168,7 +186,7 @@ export function createApp({ config, store, verifyToken }) {
     const expired = (await store.select('toilet_sessions', { where: [...base, ['ended_at', 'lt', iso(t - config.claimWindowMs)]], limit: 1000 })).length;
     const [measuring] = await store.select('toilet_sessions', { order: ['received_at', 'desc'], limit: 1,
       where: [['device_id', 'eq', device.id], ['measurement_status', 'eq', 'measuring'], ['received_at', 'gte', iso(t - DAY)]] });
-    const offline = !device.last_seen_at || t - Date.parse(device.last_seen_at) > 30_000;
+    const offline = !device.last_seen_at || t - Date.parse(device.last_seen_at) > config.offlineAfterMs;
     const startedOk = measuring?.started_at && measuring.clock_status === 'synced' && Date.parse(measuring.started_at) <= t;
     return c.json({ device: { id: device.id, name: device.name }, state: offline ? 'offline' : measuring ? 'measuring' : 'idle',
       active_started_at: startedOk ? measuring.started_at : null, candidates, expired_count: expired, server_now: iso(t) });

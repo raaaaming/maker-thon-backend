@@ -43,6 +43,9 @@ create table if not exists public.toilet_sessions (
   claimed_at timestamptz,
   received_at timestamptz not null default now()
 );
+-- Added after the first release; safe to re-run.
+alter table public.toilet_sessions add column if not exists analysis jsonb;  -- full board packet
+alter table public.devices add column if not exists status jsonb;            -- last heartbeat diagnostics
 create index if not exists toilet_sessions_owner on public.toilet_sessions (user_id, ended_at desc);
 create index if not exists toilet_sessions_candidates on public.toilet_sessions (device_id, measurement_status, ended_at) where user_id is null;
 

@@ -167,3 +167,98 @@ test('insights and account deletion', async () => {
   assert.equal(store.tables.toilet_sessions.length, 0);
   assert.equal(store.tables.deleted_sessions.length, 1);
 });
+
+// ---- board upload (device/main.py envelope) ----
+const boardEnvelope = (clock, over = {}, opt = {}) => {
+  const recorded = 200, seated = 140;
+  const start = new Date(clock.now() - recorded * 1000 - 5_000);
+  return {
+    schema_version: 1, device_id: 'toilet-01', session_id: '20261106T060000Z',
+    packet: {
+      device_id: 'toilet-01',
+      timestamp: start.toISOString().replace('Z', '123Z'), // microsecond-style, like python isoformat
+      session: { id: '20261106T060000Z', mode: 'tof', seated_s: seated, recorded_s: recorded, ...over },
+      optical_sensor_data: {
+        spectrum_net_counts: { '415nm_violet': 10.5, '445nm_indigo': -0.4, '480nm_blue': 20, clear: 300, NIR_near_infrared: null },
+        features: { after: { estimated_color: { name: '갈색', hex: '#8B5A2B', rgb: [139, 90, 43], lightness: 0.2 } } },
+        flags: [], ...opt,
+      },
+      gas_sensor_data: { ambient: { temperature_c: 24.5, humidity_pct: 41.2 }, features: { F_gas_primary: 1.2 } },
+      ai_inference_result: { status: 'uncalibrated', warning_flags: [] },
+    },
+  };
+};
+
+test('board /api/session: stores analysis, maps color, is claimable and idempotent', async () => {
+  const { call, clock, store } = setup();
+  const post = body => call('POST', '/api/session', { device: DEVICE_TOKEN, body });
+  assert.equal((await call('POST', '/api/session', { body: boardEnvelope(clock) })).status, 401);
+  assert.equal((await post(boardEnvelope(clock))).status, 200);
+  assert.equal((await post(boardEnvelope(clock))).data.duplicate, true);
+  const row = store.tables.toilet_sessions[0];
+  assert.equal(row.id, '20261106T060000Z');
+  assert.equal(row.stool_color, 'brown'); assert.equal(row.color_status, 'classified');
+  assert.equal(row.time_source, 'sensor'); assert.equal(row.clock_status, 'synced'); assert.equal(row.sitting_sec, 140);
+  assert.deepEqual(row.spectral_raw, [10.5, 0, 20, 300]);   // negatives clamped, nulls dropped
+  assert.equal(row.env.humidity_pct, 41.2);
+  assert.equal(row.analysis.gas_sensor_data.features.F_gas_primary, 1.2);
+
+  await call('POST', '/api/devices/join', { token: '1', body: { device_id: 'toilet-01', code: PAIRING } });
+  await call('POST', '/api/device/heartbeat', { device: DEVICE_TOKEN, body: { device_id: 'toilet-01' } });
+  const ctx = (await call('GET', '/api/devices/toilet-01/context', { token: '1' })).data;
+  assert.equal(ctx.candidates.length, 1);
+  const rec = await call('POST', '/api/sessions/20261106T060000Z/claim', { token: '1', body: { shape: 4, shape_status: 'selected', excretion_type: 'stool' } });
+  assert.equal(rec.status, 200);
+  assert.equal(rec.data.record.analysis, undefined); // raw analysis never leaves the server via the app API
+});
+
+test('board /api/session: quality, timed mode, stale clock and bad envelopes', async () => {
+  const { call, clock, store } = setup();
+  const post = body => call('POST', '/api/session', { device: DEVICE_TOKEN, body });
+  const id = (e, n) => ({ ...e, session_id: n, packet: { ...e.packet, session: { ...e.packet.session, id: n } } });
+
+  // saturated/poor spectrum: keep the estimate out of stool_color so no alert fires
+  const poor = id(boardEnvelope(clock, {}, { flags: ['spectrum_saturated'] }), 'poor1');
+  assert.equal((await post(poor)).status, 200);
+  assert.equal(store.tables.toilet_sessions.find(r => r.id === 'poor1').color_status, 'uncertain');
+  assert.equal(store.tables.toilet_sessions.find(r => r.id === 'poor1').stool_color, null);
+
+  // no white reference -> unmeasured
+  const e2 = id(boardEnvelope(clock, {}, { flags: ['no_white_reference'] }), 'nowhite');
+  e2.packet.optical_sensor_data.features.after = { estimated_color: null };
+  await post(e2);
+  assert.equal(store.tables.toilet_sessions.find(r => r.id === 'nowhite').color_status, 'unmeasured');
+
+  // timed (desk test) mode: no sitting time
+  await post(id(boardEnvelope(clock, { mode: 'timed' }), 'timed1'));
+  const t = store.tables.toilet_sessions.find(r => r.id === 'timed1');
+  assert.equal(t.time_source, 'unknown'); assert.equal(t.sitting_sec, null);
+
+  // very short sessions are discarded; clock far from server time is not "synced"
+  await post(id(boardEnvelope(clock, { seated_s: 5 }), 'short1'));
+  assert.equal(store.tables.toilet_sessions.find(r => r.id === 'short1').measurement_status, 'discarded');
+  clock.advance(3_600_000);
+  await post(id(boardEnvelope(clock, {}), 'late1'));
+  const stale = boardEnvelope(clock); stale.session_id = 'stale1'; stale.packet.timestamp = '2026-11-06T01:00:00Z';
+  await post(stale);
+  assert.equal(store.tables.toilet_sessions.find(r => r.id === 'stale1').clock_status, 'unknown');
+
+  assert.equal((await post({ ...boardEnvelope(clock), schema_version: 2 })).status, 400);
+  assert.equal((await post({ ...boardEnvelope(clock), device_id: 'BH-PROTO-01' })).status, 400);
+  assert.equal((await post({ ...boardEnvelope(clock), packet: null })).status, 400);
+  assert.equal((await post({ ...boardEnvelope(clock), session_id: '../x' })).status, 400);
+});
+
+test('heartbeat stores diagnostics and the app stays online between beats', async () => {
+  const { call, clock, store } = setup();
+  await call('POST', '/api/devices/join', { token: '1', body: { device_id: 'toilet-01', code: PAIRING } });
+  const hb = { device_id: 'toilet-01', state: 'IDLE', mode: 'tof', in_session: false, warm: true, outbox_pending: 2, uptime_s: 99,
+    sensors: { as7341: true, bme680: true, distance: false, button: true }, last_upload_error: 'network x'.repeat(50), junk: 'ignored' };
+  assert.equal((await call('POST', '/api/device/heartbeat', { device: DEVICE_TOKEN, body: hb })).status, 200);
+  const st = store.tables.devices[0].status;
+  assert.equal(st.sensors.distance, false); assert.equal(st.last_upload_error.length, 200); assert.equal(st.junk, undefined);
+  clock.advance(60_000); // one missed 25-second beat is still online
+  assert.equal((await call('GET', '/api/devices/toilet-01/context', { token: '1' })).data.state, 'idle');
+  clock.advance(30_000);
+  assert.equal((await call('GET', '/api/devices/toilet-01/context', { token: '1' })).data.state, 'offline');
+});

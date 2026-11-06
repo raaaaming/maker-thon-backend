@@ -44,8 +44,17 @@
 ### 보드 (Bearer `DEVICE_TOKEN`)
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| POST | `/api/device/events` | 측정 시작/완료/폐기 전송 |
-| POST | `/api/device/heartbeat` | `{device_id}` 30초 내 주기 전송 (없으면 앱에 offline) |
+| POST | `/api/session` | **UNO Q 보드(`device/main.py`)의 세션 업로드**. 봉투 `{schema_version:1, device_id, session_id, packet}` 를 그대로 받아 변환·저장 |
+| POST | `/api/device/events` | 일반 측정 이벤트(시작/완료/폐기) — 아래 정규화 형식 |
+| POST | `/api/device/heartbeat` | `{device_id, state?, sensors?, ...}` 25초마다 전송 (75초 넘게 없으면 앱에 offline, `OFFLINE_AFTER_SEC`) |
+
+### UNO Q 보드 설정 (`main.py`)
+보드 환경변수 또는 설정: `BH_API_URL`(이 백엔드의 Vercel 주소), `BH_DEVICE_TOKEN`(= 서버 `DEVICE_TOKEN`). `device_id`는 `toilet-01`이어야 해요.
+`/api/session` 변환 규칙:
+- `timestamp`=시작, `+seated_s`=종료, `+recorded_s`=확정. `mode`가 `tof`면 시간 출처는 센서, `timed`(책상 시험)면 사용 시간 없음.
+- 보드는 시계 동기 여부를 보내지 않아서, 확정 시각이 서버 시각보다 미래이거나 `CLAIM_WINDOW_MIN`보다 오래전이면 `unknown`(앱에서 저장 불가)으로 둡니다. 보드 시계를 NTP로 맞춰 두세요.
+- 분광 추정 색 → `stool_color`(센서는 대변/소변을 구분하지 못해 대변 색으로만 저장). 포화·주변광 불안정·광원 약함이면 `uncertain`으로 두고 색을 비워 색 알림이 뜨지 않게 해요. 흰 기준이 없으면 `unmeasured`.
+- 가스·분광 특징 등 패킷 전체는 `toilet_sessions.analysis`(jsonb)에 보관하고 앱 API로는 내보내지 않아요.
 
 `/api/device/events` 본문 예 (시간은 시간대 포함 ISO):
 
